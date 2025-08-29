@@ -1,7 +1,7 @@
 
 # Cross Architecture Explanation Transfer
 
-![Cross Architecture Explanation Transfer](https://github.com/NnamdiNgwu/explainable/tree/main/image)
+![Cross Architecture Explanation Transfer](https://github.com/NnamdiNgwu/explainable/blob/main/image/TXM.jpg)
 
 
 Breaking deep neural network with TXM outputs.
