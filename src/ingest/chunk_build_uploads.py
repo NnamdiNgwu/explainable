@@ -181,7 +181,7 @@ def process_http_chunks_leak_free(http_path, temporal_cutoff=None):
     
     # Combine all raw data
     raw_http = pd.concat(raw_chunks, ignore_index=True)
-    print(f"📊 Raw HTTP data: {len(raw_http)} events")
+    print(f" Raw HTTP data: {len(raw_http)} events")
     
     #  STEP 2: TEMPORAL SPLIT on raw data
     cutoff_ts = pd.Timestamp(temporal_cutoff)
@@ -203,7 +203,7 @@ def process_http_features_isolated(data, is_training=True, train_data=None):
     if len(data) == 0:
         return data
     
-    print(f"🔧 Processing {'training' if is_training else 'test'} HTTP features...")
+    print(f"Processing {'training' if is_training else 'test'} HTTP features...")
     
     #  SAFE: Rolling window only uses current dataset
     data = data.sort_values(["user", "date"]).reset_index(drop=True)
@@ -385,158 +385,6 @@ def assign_risk_labels_complete(uploads: pd.DataFrame, is_training=True, train_t
     return uploads
 
 
-def standardize_upload_features(uploads: pd.DataFrame) -> pd.DataFrame:
-    """Ensure all upload types have consistent feature columns for Enhanced Risk Classification."""
-    logger.info("Standardizing upload features across channels for risk classification...")
-    
-    # 1. EMAIL-SPECIFIC FEATURES (Already implemented)
-    email_defaults = {
-        "is_from_user": True,
-        "from_domain": "internal", 
-        "has_attachments": False,
-        "attachment_count": 0,
-        "bcc_count": 0,
-        "cc_count": 0,
-        "size": np.nan,  # Will be filled from megabytes_sent
-    }
-    
-    # 2. CONTENT ANALYSIS FEATURES (Critical for insider threat detection)
-    content_defaults = {
-        "file_extension": "unknown",          # .exe, .zip, .pdf, .doc - malware risk
-        "is_executable": False,               # High-risk file types
-        "is_compressed": False,               # ZIP, RAR - hidden content
-        "is_document": False,                 # Office docs - IP theft
-        "is_media": False,                    # Images, videos - personal content
-        "estimated_file_count": 1,            # Files in upload (archives)
-        "filename_entropy": 0.0,              # Random filenames = suspicious
-        "contains_keywords": False,           # Sensitive keywords detected
-    }
-    
-    # 3. BEHAVIORAL PATTERN FEATURES (Detect anomalous user behavior)
-    behavioral_defaults = {
-        # "user_risk_score": 0.0,              # Historical risk assessment
-        # "baseline_deviation": 0.0,           # How different from normal behavior
-        "velocity_change": 0.0,              # Sudden increase in upload frequency
-        # "size_anomaly_score": 0.0,           # Unusual upload sizes
-        # "time_anomaly_score": 0.0,           # Unusual timing patterns
-        "destination_diversity": 0.0,        # Number of unique destinations
-        # "repeat_destination_ratio": 0.0,     # Tendency to reuse destinations
-    }
-    
-    # 4. TEMPORAL CONTEXT FEATURES (Detect suspicious timing)
-    temporal_defaults = {
-        "is_holiday": False,                  # Uploads during holidays
-        "is_vacation_period": False,          # Known vacation times
-        "days_since_last_upload": 0,          # Upload frequency patterns
-        "upload_frequency_rank": 0.0,        # Percentile of user's activity
-        "time_since_hire": 0,                 # New employee risk
-        "time_until_termination": 9999,      # Departing employee risk
-        "shift_pattern": "normal",            # Day/night/weekend shifts
-    }
-    
-    # 5. NETWORK/INFRASTRUCTURE FEATURES (Detect exfiltration channels)
-    network_defaults = {
-        "destination_category": "unknown",    # Business, personal, suspicious
-        "destination_reputation": 0.5,       # Domain reputation score
-        "is_cloud_storage": False,           # Dropbox, Google Drive, etc.
-        "is_social_media": False,            # Facebook, Twitter, etc.
-        "is_file_sharing": False,            # WeTransfer, SendSpace, etc.
-        "is_encrypted_channel": False,       # HTTPS, VPN usage
-        "geo_location": "unknown",           # Geographic destination
-        "is_high_risk_country": False,       # OFAC, cyber threat countries
-        "connection_method": "direct",       # Direct, proxy, VPN
-    }
-    
-    # 6. ORGANIZATIONAL CONTEXT FEATURES (Business logic integration)
-    organizational_defaults = {
-        "department": "unknown",              # User's department
-        "access_level": "standard",          # Security clearance
-        "project_classification": "public",  # Data classification level
-        "business_justification": False,     # Approved transfer
-        "requires_approval": False,          # Policy compliance
-        "data_sensitivity": "low",           # PII, financial, IP
-        "regulatory_scope": "none",          # GDPR, HIPAA, SOX
-        "is_personal_device": False,         # BYOD vs corporate
-    }
-    
-    # 7. RISK CORRELATION FEATURES (Cross-event analysis)
-    correlation_defaults = {
-        "concurrent_logins": 0,              # Multiple simultaneous sessions
-        "device_anomaly": False,             # New/unusual device
-        "location_anomaly": False,           # Geographic inconsistency
-        "peer_group_deviation": 0.0,        # Different from similar users
-        "historical_violations": 0,         # Past security incidents
-        "watchlist_matches": 0,              # Security watch lists
-        "dlp_alerts": 0,                     # Data Loss Prevention alerts
-    }
-    
-    # 8. TECHNICAL INDICATORS (Deep technical analysis)
-    technical_defaults = {
-        "transfer_speed": 0.0,               # Mbps - slow = suspicious
-        "compression_ratio": 0.0,            # File compression efficiency
-        "encryption_detected": False,        # Encrypted content
-        "steganography_risk": 0.0,          # Hidden data in images
-        "protocol_anomaly": False,           # Unusual network protocols
-        "packet_pattern": "normal",          # Network traffic patterns
-        "session_duration": 0.0,            # Connection time
-    }
-    
-    # Combine all feature categories
-    all_feature_categories = {
-        "email": email_defaults,
-        "content": content_defaults,
-        "behavioral": behavioral_defaults,
-        "temporal": temporal_defaults,
-        "network": network_defaults,
-        "organizational": organizational_defaults,
-        "correlation": correlation_defaults,
-        "technical": technical_defaults,
-    }
-    
-    # Apply all feature categories
-    added_features = []
-    category_counts = {}
-    
-    for category_name, feature_set in all_feature_categories.items():
-        category_added = []
-        
-        for feature, default_value in feature_set.items():
-            if feature not in uploads.columns:
-                uploads[feature] = default_value
-                added_features.append(feature)
-                category_added.append(feature)
-        
-        if category_added:
-            category_counts[category_name] = len(category_added)
-            logger.info(f"  Added {len(category_added)} {category_name} features: {category_added}")
-    
-    # Special handling for size field
-    uploads["size"] = uploads["size"].fillna(uploads["megabytes_sent"] * 1e6)
-    
-    # Log summary
-    if added_features:
-        logger.info(f"FEATURE STANDARDIZATION COMPLETE:")
-        logger.info(f"  Total features added: {len(added_features)}")
-        for category, count in category_counts.items():
-            logger.info(f"  {category.capitalize()}: {count} features")
-    else:
-        logger.info("All features already present")
-    
-    # Validate critical features for risk classification
-    critical_features = [
-        "megabytes_sent", "destination_domain", "channel", "user", "date",
-        "post_burst", "destination_entropy", "first_time_destination"
-    ]
-    
-    missing_critical = [f for f in critical_features if f not in uploads.columns]
-    if missing_critical:
-        logger.error(f"CRITICAL FEATURES MISSING: {missing_critical}")
-        raise ValueError(f"Cannot proceed without critical features: {missing_critical}")
-    
-    logger.info(f"Feature standardization complete. Total columns: {len(uploads.columns)}")
-    return uploads
-
-
 
 def populate_content_features(uploads: pd.DataFrame) -> pd.DataFrame:
     """Populate content analysis features based on available data."""
@@ -611,116 +459,6 @@ def populate_content_features(uploads: pd.DataFrame) -> pd.DataFrame:
     return uploads
 
 
-
-def add_advanced_cybersecurity_features(uploads: pd.DataFrame) -> pd.DataFrame:
-    """Add advanced cybersecurity features with robust error handling."""
-    logger.info("Adding advanced cybersecurity features...")
-    
-    # 1. Network reputation scoring with safe domain mapping
-    def calculate_network_reputation(domain):
-        """Calculate network reputation score for domain."""
-        if pd.isna(domain) or domain == "USB":
-            return 0.5 if domain == "USB" else 0.0
-        
-        domain_str = str(domain).lower()
-        
-        # High-trust domains
-        trusted_domains = {'google.com', 'microsoft.com', 'apple.com', 'amazon.com'}
-        if any(trusted in domain_str for trusted in trusted_domains):
-            return 0.1  # Low risk
-        
-        # Suspicious patterns
-        suspicious_patterns = {'mail.ru', 'yandex', 'protonmail', 'tempmail', 'guerrilla'}
-        if any(pattern in domain_str for pattern in suspicious_patterns):
-            return 0.9  # High risk
-        
-        # High-risk TLDs
-        high_risk_tlds = {'.ru', '.cn', '.ir', '.kp', '.sy', '.tk', '.ml'}
-        if any(domain_str.endswith(tld) for tld in high_risk_tlds):
-            return 0.8  # High risk
-        
-        # Default medium risk
-        return 0.5
-    
-    # uploads['network_reputation_score'] = uploads['destination_domain'].apply(calculate_network_reputation)
-    
-    # 2. File type risk scoring with safe filename handling
-    def calculate_file_risk_safe(row):
-        """Calculate file risk from multiple sources safely."""
-        
-        # High-risk extensions
-        high_risk_extensions = {'.exe', '.bat', '.scr', '.pif', '.com', '.cmd', '.vbs'}
-        medium_risk_extensions = {'.zip', '.rar', '.7z', '.doc', '.xls', '.pdf', '.js'}
-        
-        # Check attachments field (email uploads)
-        if 'attachments' in uploads.columns and pd.notna(row.get('attachments')):
-            attachments = str(row['attachments']).lower()
-            if any(ext in attachments for ext in high_risk_extensions):
-                return 1.0
-            elif any(ext in attachments for ext in medium_risk_extensions):
-                return 0.6
-        
-        # Check filename field if exists
-        if 'filename' in uploads.columns and pd.notna(row.get('filename')):
-            filename = str(row['filename']).lower()
-            if any(ext in filename for ext in high_risk_extensions):
-                return 1.0
-            elif any(ext in filename for ext in medium_risk_extensions):
-                return 0.6
-        
-        # Check destination domain for file-sharing sites
-        domain = str(row.get('destination_domain', '')).lower()
-        file_sharing_sites = {'wetransfer', 'sendspace', 'filemail', 'rapidshare'}
-        if any(site in domain for site in file_sharing_sites):
-            return 0.7  # File sharing inherently risky
-        
-        # Default low-medium risk
-        return 0.3
-    
-    # uploads['file_type_risk_score'] = uploads.apply(calculate_file_risk_safe, axis=1)
-    
-    # 3. Concurrent user activity analysis (safe date handling)
-    try:
-        uploads_sorted = uploads.sort_values(['date', 'user'])
-        uploads_sorted['concurrent_user_activity'] = uploads_sorted.groupby('date')['user'].transform('nunique')
-        uploads['concurrent_user_activity'] = uploads_sorted['concurrent_user_activity']
-    except Exception as e:
-        logger.warning(f"Could not calculate concurrent user activity: {e}")
-        uploads['concurrent_user_activity'] = 1  # Default single user
-    
-    # 4. Policy violation history (SAFE - only if labels exist)
-    if 'label' in uploads.columns:
-        try:
-            # Safe rolling calculation without index issues
-            uploads_sorted = uploads.sort_values(['user', 'date']).reset_index(drop=True)
-            
-            def safe_user_violation_history(group):
-                """Calculate policy violations safely for each user group."""
-                # Use simple cumulative sum instead of rolling window
-                violation_count = (group['label'] > 0).cumsum()
-                # Shift to exclude current event
-                return violation_count.shift(1).fillna(0)
-            
-            policy_violations = uploads_sorted.groupby('user')['label'].apply(
-                lambda group: safe_user_violation_history(group.reset_index(drop=True))
-            ).values
-            
-            # uploads['policy_violation_history'] = policy_violations
-            
-        except Exception as e:
-            logger.warning(f"Could not calculate policy violation history: {e}")
-            # uploads['policy_violation_history'] = 0  # Default no violations
-    else:
-        # uploads['policy_violation_history'] = 0  # No labels yet
-        print(" No 'label' column found for policy violation history calculation")
-        # # Remove user identity column to eliminate leakage
-    if 'user' in uploads.columns:
-        print(f" Removing user column (had {data['user'].nunique()} unique users)")
-        uploads = uploads.drop(columns=['user'])
-    
-    return uploads
-
-
 def create_simple_temporal_split(uploads: pd.DataFrame, cutoff: str):
     """Simple temporal split without data modification."""
     
@@ -758,7 +496,7 @@ def add_features_leak_free_FIXED(data, is_training=True, train_data=None, cutoff
     if business_rules is None:
         business_rules = BusinessRulesConfig()
     
-    print(f"🔧 Adding leak-free features to {'training' if is_training else 'test'} data...")
+    print(f"Adding features to {'training' if is_training else 'test'} data...")
     
     # ========================================================================
     # TEMPORAL UNIQUENESS FEATURES (Prevent identical vectors)
@@ -833,7 +571,7 @@ def add_features_leak_free_FIXED(data, is_training=True, train_data=None, cutoff
             print(" Loaded training population statistics")
         except FileNotFoundError:
             if train_data is not None:
-                print("🔧 Computing fallback population statistics from provided train_data...")
+                print(" Computing fallback population statistics from provided train_data...")
                 population_stats = {
                     'hour_median': train_data['hour'].median(),
                     'hour_std': train_data['hour'].std(),
@@ -923,38 +661,6 @@ def validate_temporal_isolation(train_df, test_df):
     assert train_max < test_min, f"Temporal overlap: {train_max} >= {test_min}"
     print(" Temporal isolation verified")
 
-# def _drop_highly_correlated_features(df: pd.DataFrame,
-#                                      leakage_cols: list,
-#                                      threshold: float = 0.95,
-#                                      protected: set | None = None) -> tuple[pd.DataFrame, list]:
-#     """
-#     Remove highly correlated numeric features (|r| >= threshold) AFTER leakage removal.
-#     Returns (reduced_df, dropped_feature_list).
-#     """
-#     protected = protected or set()
-#     # Build sanitized numeric frame (no leakage, no zero-variance)
-#     numeric_sanitized = _prepare_corr_frame(
-#         df.drop(columns=[c for c in leakage_cols if c in df.columns]),
-#         leakage_cols=[]
-#     )
-#     if numeric_sanitized.shape[1] < 2:
-#         return df, []
-#     corr = numeric_sanitized.corr().abs()
-#     upper = corr.where(np.triu(np.ones(corr.shape), k=1).astype(bool))
-
-#     to_drop = []
-#     for col in upper.columns:
-#         if col in protected:
-#             continue
-#         if (upper[col] >= threshold).any():
-#             to_drop.append(col)
-
-#     if not to_drop:
-#         return df, []
-
-#     reduced = df.drop(columns=[c for c in to_drop if c in df.columns])
-#     return reduced, to_drop
-
 
 def build_upload_table_ENHANCED(raw_dir: pathlib.Path, cutoff: str, decoy_file_path: str = None) -> pd.DataFrame:
     """
@@ -996,7 +702,7 @@ def build_upload_table_ENHANCED(raw_dir: pathlib.Path, cutoff: str, decoy_file_p
     train_raw = uploads_raw[uploads_raw.date < cutoff_ts].copy()
     test_raw = uploads_raw[uploads_raw.date >= cutoff_ts].copy()
     
-    print(f"📊 Temporal split: Train={len(train_raw)}, Test={len(test_raw)}")
+    print(f" Temporal split: Train={len(train_raw)}, Test={len(test_raw)}")
     
     # Enhanced feature engineering
     train_processed = add_features_leak_free_FIXED(train_raw, is_training=True)
@@ -1032,24 +738,6 @@ def build_upload_table_ENHANCED(raw_dir: pathlib.Path, cutoff: str, decoy_file_p
     uploads_final = pd.concat([train_processed, test_processed], ignore_index=True)
     uploads_final = merge_logon_with_uploads(uploads_final, logon_summary)
 
-    # leakage_cols_model = [
-    #     'label','risk_score','ml_risk_score',
-    #     'ml_high_flag','ml_med_flag','composite_anomaly_score'
-    # ]
-
-    # uploads_full = uploads_final.copy()
-    #  # Leak-free feature matrix (keep date for splits; drop targets/derived flags)
-    # features_no_leak = uploads_full.drop(columns=[c for c in leakage_cols_model if c in uploads_full.columns],
-    #                                      errors='ignore')
-    
-    #  # Correlation-based pruning (exclude date-like non-numeric automatically by sanitizer; protect key cols if present)
-    # protected_cols = {'date'}  # add ids you never want removed
-    # pruned_features_df, dropped_corr = _drop_highly_correlated_features(
-    #     features_no_leak,
-    #     leakage_cols=[],          # already removed leakage above
-    #     threshold=0.95,
-    #     protected=protected_cols
-    # )
 
     # Generate enhanced reports
     generate_enhanced_reports(uploads_final, pathlib.Path("reports"))

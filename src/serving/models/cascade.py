@@ -1,10 +1,10 @@
+"""cascade.py: RF→Transformer cascade with two thresholds (tau, tau2)."""
 import torch
 import numpy as np
 import logging
 from typing import Dict
 from flask import current_app
 from .encoders import encode_tabular, encode_sequence_semantic
-
 
 def decide_with_tau2(transformer_probs: np.ndarray, tau2: float) -> (int, float):
     """
@@ -24,7 +24,6 @@ def decide_with_tau2(transformer_probs: np.ndarray, tau2: float) -> (int, float)
             return (rest_idx, p_not_low)
         else:
             return (0, p_not_low)
-
 
 def rf_predict_proba(rf_model, X: np.ndarray) -> np.ndarray:
     """Get RF prediction probabilities."""
@@ -66,6 +65,7 @@ def transformer_predict_proba(model, cont: torch.Tensor, cat_high: torch.Tensor,
             logging.error(f"cat_high type: {type(cat_high)}, shape: {cat_high.shape}")
             logging.error(f"cat_low type: {type(cat_low)}, shape: {cat_low.shape}")
             raise
+
 
 def cascade_predict(event: Dict) -> Dict:
     """
@@ -142,56 +142,3 @@ def cascade_predict(event: Dict) -> Dict:
                 "gate_reason": "Transformer failure; returned RF argmax"
             }
         raise RuntimeError(f"Both models failed: {e}")
-
-
-# def cascade_predict(event: Dict) -> Dict:
-#     """Main cascade prediction logic."""
-    
-    
-#     models = current_app.ml_models
-    
-#     try:
-#         # Stage 1: RF Screening
-#         X_tab = encode_tabular(event)
-#         rf_proba = rf_predict_proba(models['rf'], X_tab)
-#         rf_confidence = float(rf_proba.max())
-#         rf_prediction = int(rf_proba.argmax())
-    
-#         # Decision point
-#         if rf_confidence >= models['tau']:
-#             # High confidence threshold: Use RF
-#             return {
-#                 "prediction": rf_prediction,
-#                 "confidence": rf_confidence,
-#                 "model_used": "RandomForest",
-#                 "probabilities": rf_proba.tolist()
-#             }
-#     except Exception as e:
-#         logging.info(f"RF prediction failed, using transformer {e}")
-
-    
-#     # Phase 2: Low confidence: Use Transformer
-#     try:
-#         cont, cat_high, cat_low = encode_sequence_semantic(
-#             event,
-#             models['feature_lists'],
-#             models['embed_maps'],
-#             models.get('device', 'cpu')  # Use 'cpu' as default if device not specified
-#         )
-#         transformer_proba = transformer_predict_proba(
-#             models['transformer'], 
-#             cont, #.squeeze(0), 
-#             cat_high, #.squeeze(0), 
-#             cat_low, #.squeeze(0), 
-#             models['device']
-#             )
-                
-#         return {
-#             "prediction": int(transformer_proba.argmax()),
-#             "confidence": float(transformer_proba.max()),
-#             "model_used": "CybersecurityTransformer",
-#             "probabilities": transformer_proba.tolist()
-#             }
-#     except Exception as e:
-#         logging.error(f"Transformer prediction failed: {e}")
-#         raise Exception("Both models failed: {e}")

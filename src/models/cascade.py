@@ -30,18 +30,9 @@ import argparse, json, pathlib, collections
 import numpy as np, joblib, torch
 from sklearn.metrics import precision_recall_curve, f1_score
 from sklearn.model_selection import train_test_split
-from src.models.bilstm_attention import build_model_from_maps
-from src.models.cybersecurity_transformer import build_cybersecurity_transformer_from_maps
-# from src.models.train_lstm import split_features
-from src.models.safe_smote import SafeSMOTE
+from models.safe_smote import SafeSMOTE
+from models.to_be_submitted.cybersecurity_transformer3 import build_cybersecurity_transformer_from_maps
 
-
-# def split_features(seq_tensor, cont_dim, high_cat_dim, low_cat_dim):
-#     """Split sequence tensor into continuous and categorical components - matches LSTM pattern."""
-#     cont = seq_tensor[..., :cont_dim]
-#     cat_high = seq_tensor[..., cont_dim:cont_dim+high_cat_dim].long()
-#     cat_low = seq_tensor[..., cont_dim+high_cat_dim:cont_dim+high_cat_dim+low_cat_dim].long()
-#     return cont, cat_high, cat_low
 
 # ---------------------------- load artefacts ----------------------------
 def load_models(data_dir: pathlib.Path, device: str):
@@ -52,11 +43,9 @@ def load_models(data_dir: pathlib.Path, device: str):
     feature_lists = json.loads((data_dir / "feature_lists.json").read_text())
     cont_dim = len(feature_lists["CONTINUOUS_USED"]) + len(feature_lists["BOOLEAN_USED"])
 
-    # lstm = build_model_from_maps(embed_maps, continuous_dim=cont_dim)
-    # lstm.load_state_dict(torch.load(data_dir / "lstm_attention.pt", map_location=device))
-    # lstm.to(device).eval()
-
-    transformer = build_cybersecurity_transformer_from_maps(embed_maps, continuous_dim=cont_dim, num_classes=2)
+    transformer = build_cybersecurity_transformer_from_maps(embed_maps, 
+                                                            continuous_dim=cont_dim, 
+                                                            num_classes=3)
     state_dict = torch.load(data_dir / "cybersecurity_transformer.pt", map_location=device)
 
     # Remove _orig_mod. prefix from keys if present
@@ -70,61 +59,50 @@ def load_models(data_dir: pathlib.Path, device: str):
     transformer.load_state_dict(state_dict)
 
     transformer.to(device).eval()
-    return rf, transformer, embed_maps #lstm,
+    return rf, transformer, embed_maps 
 
 # ---------------------------- inference helpers ----------------------------
 def rf_predict_proba(rf,x_tab_row):
     return rf.predict_proba(x_tab_row.reshape(1, -1))[0] # return np array (3,)
 
-# def lstm_predict_proba(lstm, cont_row, cat_high_row, cat_low_row, device):
-#     """Predict probabilities using LSTM model."""
-#     with torch.no_grad():
-#         # seq_row is a tuple (cont, cat_high, cat_low)
-#         # cont_row, cat_high_row, cat_low_row = seq_row
-#         seq_tuple = (cont_row.unsqueeze(0).to(device), 
-#                      cat_high_row.unsqueeze(0).to(device), 
-#                      cat_low_row.unsqueeze(0).to(device))
-#         logits = torch.softmax(lstm(seq_tuple), dim=1).cpu().numpy()[0]
-#     return logits  # Return as numpy array
 
-# def transformer_predict_proba(transformer, seq_test, device, cont_dim, high_cat_dim, low_cat_dim):
-#     """Evaluate CybersecurityTransformer with correct interface."""
-#     transformer.to(device).eval()
-#     predictions = []
-    
-#     with torch.no_grad():
-#         if isinstance(seq_test, tuple):
-#             cont_test, cat_test = seq_test
-            
-#             for i in range(len(cont_test)):
-#                 cont_seq = cont_test[i:i+1].to(device)
-#                 cat_high = cat_test[i:i+1, :, :high_cat_dim].long().to(device)
-#                 cat_low = cat_test[i:i+1, :, high_cat_dim:].long().to(device)
-                
-#                 logits = transformer((cont_seq, cat_high, cat_low))
-#                 pred = torch.softmax(logits, dim=1).argmax(1).cpu().item()
-#                 predictions.append(pred)
-    
-#     return np.array(predictions)
-
-# apply for tau2
 def transformer_predict_proba(transformer, seq_test, device, cont_dim, high_cat_dim, low_cat_dim):
-    """Evaluate CybersecurityTransformer with correct interface. Returns P(malicious)."""
+    """Return P(High) for a 3-class transformer. Accepts (cont, cat) or (cont, cat_high, cat_low)."""
     transformer.to(device).eval()
     probs = []
+
     with torch.no_grad():
         if isinstance(seq_test, tuple):
-            cont_test, cat_test = seq_test
-            for i in range(len(cont_test)):
-                cont_seq = cont_test[i:i+1].to(device)
-                cat_high = cat_test[i:i+1, :, :high_cat_dim].long().to(device)
-                cat_low  = cat_test[i:i+1, :, high_cat_dim:].long().to(device)
+            if len(seq_test) == 3:
+                # Already split: (cont, cat_high, cat_low)
+                cont_test, cat_high, cat_low = seq_test
+                N = len(cont_test)
+                for i in range(N):
+                    cont_seq = cont_test[i:i+1].to(device)
+                    cat_high_seq = cat_high[i:i+1].long().to(device)
+                    cat_low_seq  = cat_low[i:i+1].long().to(device)
 
-                out = transformer(cont_seq, cat_high, cat_low)  # supports (cont, cat_high, cat_low)
-                logits = out["logits"] if isinstance(out, dict) else out
-                p = torch.softmax(logits, dim=1)[0].detach().cpu().numpy()
-                # positive class = index 1 if binary; else last index
-                probs.append(float(p[1] if p.shape[0] >= 2 else p[-1]))
+                    logits = transformer(cont_seq, cat_high_seq, cat_low_seq)
+                    p = torch.softmax(logits, dim=1)[0]
+                    probs.append(float(p[2]))  # High = index 2
+            elif len(seq_test) == 2:
+                # Unsplit: (cont, cat); split using dims
+                cont_test, cat_all = seq_test
+                N = len(cont_test)
+                for i in range(N):
+                    cont_seq = cont_test[i:i+1].to(device)
+                    cat_slice = cat_all[i:i+1]
+                    cat_high_seq = cat_slice[:, :, :high_cat_dim].long().to(device)
+                    cat_low_seq  = cat_slice[:, :, high_cat_dim:].long().to(device)
+
+                    logits = transformer(cont_seq, cat_high_seq, cat_low_seq)
+                    p = torch.softmax(logits, dim=1)[0]
+                    probs.append(float(p[2]))  # High = index 2
+            else:
+                raise ValueError(f"Unexpected seq_test tuple length: {len(seq_test)}")
+        else:
+            # If someone passes a raw tensor, require caller to split outside; be explicit.
+            raise TypeError("seq_test must be a tuple: (cont, cat) or (cont, cat_high, cat_low)")
     return np.array(probs)
 
 
@@ -138,13 +116,6 @@ def tune_threshold(rf, transformer, X_val_tab, seq_val, y_val, device, cont_dim,
         p_rf = rf_predict_proba(rf, x_tab)
         rf_max.append(p_rf.max())
         pred_rf.append(p_rf)
-
-    # # Choose positive label robustly. uncomment if needed using tau2
-    # uniq = np.unique(y_val)
-    # pos_label = 2 if 2 in uniq else (1 if 1 in uniq else int(uniq.max()))
-    # y_bin = (y_val == pos_label).astype(int)
-
-    # precisions, recalls, thresholds = precision_recall_curve(y_bin, rf_max)
 
     # Use RF confidence only - threshold  will define split
     precisions, recalls, thresholds = precision_recall_curve(
@@ -201,12 +172,6 @@ def main():
     high_cat_dim = len(feature_lists["HIGH_CAT_USED"])
     low_cat_dim = len(feature_lists["LOW_CAT_USED"])
 
-    # # Load label mapping
-    # label_mapping = json.loads((args.data_dir / "label_mapping.json").read_text())
-    # positive_class = label_mapping[args.positive_class_name]
-    # print(f"Using '{args.positive_class_name}' class as positive")
-
-
     # load feature arrays -------------------------------------
     X_tab = np.load(args.data_dir / "X_train_tab.npy", allow_pickle=True)
     y_tab = np.load(args.data_dir / "y_train.npy", allow_pickle=True)
@@ -253,8 +218,6 @@ def main():
     print("Validation set class distribution:", dict(class_counts))
     print("Unique classes in y_val:", np.unique(y_val))
 
-    # rf, lstm, transformer, _ = load_models(args.data_dir, args.device)
-    # tau = tune_threshold(rf, lstm, X_val_tab, seq_val, y_val, args.device, cont_dim, high_cat_dim, low_cat_dim)
     rf, transformer, _ = load_models(args.data_dir, args.device)
     tau = tune_threshold(rf,transformer, X_val_tab, seq_val, y_val, args.device, cont_dim, high_cat_dim, low_cat_dim)
     print(f"Optimal threshold τ (F1) ≈ {tau:.2f}")

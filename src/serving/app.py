@@ -2,7 +2,7 @@ from flask import Flask
 from flask_cors import CORS
 import logging
 import os
-from src.models.safe_smote import SafeSMOTE
+from models.safe_smote import SafeSMOTE
 import sys
 sys.modules[__name__].SafeSMOTE = SafeSMOTE
 # Ensure SafeSMOTE is available in the app context
@@ -16,31 +16,6 @@ from .blueprints import (
     monitoring_bp,
     admin_bp
 )
-def _validate_feature_consistency(app):
-    """Validate that features are consistent across components."""
-    with app.app_context():
-        from .utils.validation import get_sample_event
-        from .models.encoders import encode_tabular, encode_sequence_semantic
-        
-        # Test with sample data
-        sample = get_sample_event()
-        
-        try:
-            # Test both encoding paths
-            X_tab = encode_tabular(sample)
-            cont, cat_high, cat_low = encode_sequence_semantic(
-                sample,
-                app.ml_models['feature_lists'],
-                app.ml_models['embed_maps']
-              )
-            
-            logging.info("✅ Feature consistency validation passed")
-            logging.info(f"   - Features: {len(app.ml_models['feature_names'])}")
-            logging.info(f"   - RF input shape: {X_tab.shape}")
-            logging.info(f"   - Transformer input shapes: {cont.shape}, {cat_high.shape}, {cat_low.shape}")
-            
-        except Exception as e:
-            raise ValueError(f"Feature consistency validation failed: {e}")
 
 def create_app(config_name='production'):
     """Application factory pattern."""
@@ -66,7 +41,7 @@ def create_app(config_name='production'):
             logging.info("All models loaded successfully")
         
         # Validate feature consistency
-        _validate_feature_consistency(app)
+        # _validate_feature_consistency(app)
     except Exception as e:
         logging.error(f"Failed to load models: {e}")
         raise

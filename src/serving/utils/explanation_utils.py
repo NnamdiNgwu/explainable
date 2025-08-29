@@ -1,3 +1,4 @@
+# explanation_utils.py
 import logging
 import numpy as np
 import torch
@@ -9,18 +10,99 @@ from ..utils.feature_mapping import create_feature_vector_from_event
 
 
 
+import numpy as np
+
+def _select_class_vector(phi_rf_any, cls_idx: int) -> np.ndarray:
+    """Return (F,) vector for the chosen class from SHAP outputs that may be list/(F,C)/(1,F)."""
+    if isinstance(phi_rf_any, list):
+        v = np.asarray(phi_rf_any[cls_idx])
+        return v[0] if v.ndim == 2 else v
+    arr = np.asarray(phi_rf_any)
+    if arr.ndim == 2:      # (1,F)
+        return arr[0]
+    if arr.ndim == 3:      # (1,F,C)
+        return arr[0, :, cls_idx]
+    if arr.ndim == 1:      # (F,)
+        return arr
+    return arr.reshape(-1)
+
+def _expected_value_for_class(ev_any, cls_idx: int) -> float:
+    if isinstance(ev_any, list):
+        return float(np.asarray(ev_any)[cls_idx])
+    if isinstance(ev_any, np.ndarray):
+        if ev_any.ndim == 1 and ev_any.size > cls_idx:
+            return float(ev_any[cls_idx])
+        return float(ev_any.reshape(-1)[0])
+    return float(ev_any)
+
+
+# def get_rf_explanation_data(evt, models):
+#     """Get RF explanation data ."""
+#     X_tab = encode_tabular(evt)
+#     rf_proba = rf_predict_proba(models['rf'], X_tab)
+#     cls = int(rf_proba.argmax())
+#     conf = float(rf_proba.max())
+    
+#     try:
+#         # shap_values = _safe_get_shap_values(models['rf_explainer'], X_tab.reshape(1, -1), cls)
+#         # baseline = _get_safe_baseline(models['rf_explainer'], cls)
+#         phi_rf_any = models['rf_explainer'].shap_values(X_tab.reshape(1, -1))
+#         shap_values = _select_class_vector(phi_rf_any, cls)  # (F,)
+#         # Build dict(feature -> shap importance) for NLG
+#         shap_dict = dict(zip(models['feature_names'], shap_values))
+#         brief_reason = generate_natural_language_explanation(shap_dict, evt)
+#         logging.info(f"RF explanation generated: {brief_reason}")
+
+#         return {
+#             "model_used": "RandomForest",
+#             "prediction": cls,
+#             "confidence": conf,
+#             "probabilities": rf_proba.tolist(),
+#             "explanation": {
+#                 "method": "SHAP_TreeExplainer",
+#                 "local_importance": _format_feature_importance(shap_values, models['feature_names']),
+#                 "baseline": baseline,
+#                 "brief_reason": brief_reason,
+#                 "top_features": [
+#                     {"feature": feat, "importance": round(imp, 4)}
+#                     for feat, imp in list(zip(models['feature_names'], shap_values))
+#                 ][:5]
+#             }
+#         }
+#     except Exception as e:
+#         logging.warning(f"RF SHAP failed: {e}")
+#         return {
+#             "model_used": "RandomForest", 
+#             "prediction": cls,
+#             "confidence": conf,
+#             "probabilities": rf_proba.tolist(),
+#             "explanation": {"method": "basic", "note": f"SHAP failed: {e}"}
+#         }
+
+
 def get_rf_explanation_data(evt, models):
-    """Get RF explanation data ."""
+    """Get RF explanation data."""
     X_tab = encode_tabular(evt)
     rf_proba = rf_predict_proba(models['rf'], X_tab)
     cls = int(rf_proba.argmax())
     conf = float(rf_proba.max())
-    
+
+    # Compute baseline first so it exists even if SHAP fails later
     try:
-        shap_values = _safe_get_shap_values(models['rf_explainer'], X_tab.reshape(1, -1), cls)
         baseline = _get_safe_baseline(models['rf_explainer'], cls)
+    except Exception as be:
+        logging.warning(f"RF baseline fetch failed, defaulting to 0.0: {be}")
+        baseline = 0.0
+
+    try:
+        # rf_feat_names = models.get('rf_feature_names', models['feature_names'])
+        shap_values = _safe_get_shap_values(models['rf_explainer'], X_tab.reshape(1, -1), cls)
+        if shap_values is None or (hasattr(shap_values, "size") and shap_values.size == 0):
+            raise ValueError("Empty SHAP values")
+
         # Build dict(feature -> shap importance) for NLG
         shap_dict = dict(zip(models['feature_names'], shap_values))
+        # shap_dict = dict(zip(rf_feat_names, shap_values))
         brief_reason = generate_natural_language_explanation(shap_dict, evt)
         logging.info(f"RF explanation generated: {brief_reason}")
 
@@ -32,24 +114,30 @@ def get_rf_explanation_data(evt, models):
             "explanation": {
                 "method": "SHAP_TreeExplainer",
                 "local_importance": _format_feature_importance(shap_values, models['feature_names']),
-                "baseline": baseline,
+                # "local_importance": _format_feature_importance(shap_values,rf_feat_names ),
+                "baseline": float(baseline),
                 "brief_reason": brief_reason,
                 "top_features": [
                     {"feature": feat, "importance": round(imp, 4)}
                     for feat, imp in list(zip(models['feature_names'], shap_values))
+                    # for feat, imp in list(zip(rf_feat_names, shap_values))
                 ][:5]
             }
         }
     except Exception as e:
-        logging.warning(f"RF SHAP failed: {e}")
+        logging.warning(f"RF SHAP failed: {e}", exc_info=True)
+        # Fallback: still return a usable payload; do NOT reference 'baseline' here
         return {
-            "model_used": "RandomForest", 
+            "model_used": "RandomForest",
             "prediction": cls,
             "confidence": conf,
             "probabilities": rf_proba.tolist(),
-            "explanation": {"method": "basic", "note": f"SHAP failed: {e}"}
+            "explanation": {
+                "method": "basic",
+                "note": f"SHAP failed: {e}"
+            }
         }
-    
+
 
 def get_transformer_explanation_data(evt, models, method='basic'):
     """Get transformer explanation data ."""
@@ -60,7 +148,7 @@ def get_transformer_explanation_data(evt, models, method='basic'):
         evt,
         models['feature_lists'],
         models['embed_maps'],
-        models.get('device', 'cpu'))  # Use 'cpu' as default if device not specified
+        models.get('device', 'cpu'))  
     transformer_proba = transformer_predict_proba(models['transformer'], cont, cat_high, cat_low, models['device'])
     cls = int(transformer_proba.argmax())
     conf = float(transformer_proba.max())
@@ -68,19 +156,10 @@ def get_transformer_explanation_data(evt, models, method='basic'):
     explanation = {"method": method}
 
     # check for transformer explainer correctly
-    # transformer_explainer = models.get('transformer_explainer', {})
-    # has_shap = False
     transformer_explainer = models.get('transformer_explainer')
     has_explainer = transformer_explainer is not None
 
     logging.info(f"RF-to-Transformer mapper available: {has_explainer}")
-    
-    # if isinstance(transformer_explainer, dict):
-    #     has_shap = transformer_explainer.get('transformer_explainer') is not None
-    #     logging.info(f"Dict explainer available: {has_shap}")
-    # else:
-    #     has_shap = transformer_explainer is not None
-    #     logging.info(f"Direct explainer available: {has_shap}")
 
     # if method == 'shap' and has_shap:
     if method == 'shap' and has_explainer:
@@ -114,7 +193,7 @@ def get_transformer_explanation_data(evt, models, method='basic'):
         "explanation": explanation
     }
 
-def _get_top_features(shap_values, feature_names, top_k=2):
+def _get_top_features(shap_values, feature_names, top_k=5):
     """Get top features from SHAP values."""
     if shap_values is None or shap_values.size == 0:
         return []
@@ -153,7 +232,7 @@ def _explain_rf_prediction(evt, models, rf_proba):
         })
     
     try:
-        # ADD DEBUG LOGGING HERE - Right before SHAP computation
+        # Debugging info
         logging.info("=== SHAP DEBUG INFO ===")
         logging.info(f"rf_explainer exists: {models.get('rf_explainer') is not None}")
         logging.info(f"rf_explainer type: {type(models.get('rf_explainer'))}")
@@ -292,14 +371,6 @@ def _get_transformer_shap_explanation(evt, models, cls):
     """Get SHAP explanation for transformer."""
     
     transformer_explainer = models.get('transformer_explainer', {})
-    
-    # if isinstance(transformer_explainer, dict):
-    #     actual_shap_explainer = transformer_explainer.get('transformer_explainer') #('shap_explainer')
-    # else:
-    #     actual_shap_explainer = transformer_explainer
-    
-    # if not actual_shap_explainer: #models.get('transformer_explainer'):
-    #     return {"shap_note": "SHAP explainer not available"}
 
     if not transformer_explainer:
         return {"shap_note": "SHAP explainer not available"}
@@ -330,34 +401,10 @@ def _get_transformer_shap_explanation(evt, models, cls):
         mapped_shap_values = explanation_result['shap_values']
         
         # Handle the output format (ensure we get values for the predicted class)
-        # if mapped_shap_values.ndim > 1:
-        #     class_shap_values = mapped_shap_values[0]  # First sample
-        # else:
-        #     class_shap_values = mapped_shap_values
         class_shap_values = mapped_shap_values[0] if mapped_shap_values.ndim > 1 else mapped_shap_values
-        # cont, cat_high, cat_low = encode_sequence_semantic(evt)
-        # Get SHAP values
-        # shap_values = models['transformer_explainer'].shap_values(X, nsamples=100)[cls][0]
-        # shap
-        # shap_values = actual_shap_explainer.shap_values(X) #((cont, cat_high, cat_low)) #(X)[cls][0] # if hasattr(actual_shap_explainer, 'shap_values') else None
-
-        # # handle output format
-        # if isinstance(shap_values, list):
-        #     class_shap_values = shap_values[cls] if len(shap_values) > cls else shap_values[0]
-        # else:
-        #     class_shap_values = shap_values
         
         logging.info(f"class_shap_values type: {type(class_shap_values)}")
         logging.info(f"class_shap_values has detach: {hasattr(class_shap_values, 'detach')}")
-        
-            
-        # # Convert to numpy if it's a tensor
-        # if hasattr(class_shap_values, 'detach'):
-        #     class_shap_values = class_shap_values.detach().cpu().numpy()
-        # elif hasattr(class_shap_values, 'cpu'):
-        #     class_shap_values = class_shap_values.cpu().numpy()
-        # elif isinstance(class_shap_values, torch.Tensor):
-            # class_shap_values = class_shap_values.numpy()
         
         # Ensure it's a numpy array
         if not isinstance(class_shap_values, np.ndarray):
@@ -620,12 +667,7 @@ def _get_comprehensive_transformer_analysis(evt, models):
             analysis["explanations"]["shap"] = {"error": f"Explanation mapping failed: {str(e)}"}
             logging.error(f"RF-to-Transformer mapping failed: {e}")
     
-    # if models.get('transformer_explainer'):
-        # try:
-        #     analysis["explanations"]["shap"] = _get_transformer_shap_explanation(evt, models, cls)
-        # except Exception as e:
-        #     analysis["explanations"]["shap"] = {"error": f"SHAP explanation failed: {str(e)}"}
-    
+   
     if models.get('transformer_captum'):
         try:
             analysis["explanations"]["captum"] = _get_transformer_captum_explanation(evt, models, cont, cat_high, cat_low, cls)
@@ -727,7 +769,7 @@ suspicious_domains = set([
     "dropbox.com", "mega.nz", "we.tl", "anonfiles.com", "zippyshare.com",
     "sendspace.com", "mediafire.com", "gofile.io"
 ])
-# Add to explanation_utils.py
+
 RISK_TEMPLATES = {
     "after_hours_large": "Large file transfer ({size}MB) outside business hours ({hour}:00)",
     "suspicious_domain": "Data sent to potentially risky domain ({domain})",
@@ -753,44 +795,3 @@ def generate_natural_language_explanation(shap_values, event_data):
     
     return f"Flagged because: {', '.join(explanations)}"
 
-
-# def _get_basic_explanation(event, result):
-#     """Get basic explanation for prediction."""
-#     models = current_app.ml_models
-    
-#     if result["model_used"] == "RandomForest":
-#         # RF explanation using SHAP
-#         try:
-#             X_tab = encode_tabular(event)
-#             # shap_values = models['rf_explainer'].shap_values(X_tab.reshape(1, -1))[result["prediction"]][0]
-#             shap_values = _safe_get_shap_values(models['rf_explainer'], X_tab.reshape(1, -1), result["prediction"])
-#             logging.info(f"shap_values type: {type(shap_values)}, shape: {getattr(shap_values, 'shape', None)}")
-
-#             if shap_values is None or (hasattr(shap_values, "size") and shap_values.size == 0):
-#                 raise ValueError("SHAP returned no values for this prediction.")
-                        
-#             # Get top contributing features
-#             feature_importance = list(zip(models['feature_names'], shap_values))
-#             feature_importance.sort(key=lambda x: abs(x[1]), reverse=True)
-            
-#             return {
-#                 "method": "SHAP_TreeExplainer",
-#                 "confidence_level": "exact",
-#                 "top_features": [
-#                     {"feature": feat, "importance": round(imp, 4)}
-#                     for feat, imp in feature_importance[:5]
-#                 ]
-#             }
-#         except Exception as e:
-#             logging.warning(f"SHAP explanation failed: {e}")
-#             return {
-#                 "method": "basic",
-#                 "note": "SHAP explanation unavailable"
-#             }
-#     else:
-#         # Transformer explanation (simplified)
-#         return {
-#             "method": "attention_analysis",
-#             "confidence_level": "approximate",
-#             "note": "Deep sequential analysis for uncertain cases"
-#         }
